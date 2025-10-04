@@ -1,0 +1,185 @@
+# ============================================
+# CARROM ARENA - PRODUCTION DOCKERFILE
+# ============================================
+# Multi-stage Docker build for Carrom Arena
+# Real-money gaming platform with optimized production setup
+
+# ============================================
+# STAGE 1: Dependencies Installation
+# ============================================
+FROM node:18-alpine AS dependencies
+
+# Set working directory
+WORKDIR /app
+
+# Add metadata
+LABEL maintainer="Carrom Arena Team"
+LABEL description="Real-money Carrom gaming platform"
+LABEL version="1.0.0"
+
+# Install system dependencies for node-gyp and native modules
+RUN apk add --no-cache \
+    libc6-compat \
+    python3 \
+    make \
+    g++ \
+    cairo-dev \
+    jpeg-dev \
+    pango-dev \
+    musl-dev \
+    giflib-dev \
+    pixman-dev \
+    pangomm-dev \
+    libjpeg-turbo-dev \
+    freetype-dev
+
+# Copy package files
+COPY package.json package-lock.json* ./
+
+# Install dependencies with production optimizations
+RUN npm ci --only=production --silent --no-audit --no-fund && \
+    npm cache clean --force
+
+# ============================================
+# STAGE 2: Build Stage
+# ============================================
+FROM node:18-alpine AS builder
+
+WORKDIR /app
+
+# Copy dependencies from previous stage
+COPY --from=dependencies /app/node_modules ./node_modules
+
+# Copy source code
+COPY . .
+
+# Set build environment
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV GENERATE_SOURCEMAP=false
+
+# Build the application
+RUN npm run build && \
+    npm prune --production
+
+# ============================================
+# STAGE 3: Production Runtime
+# ============================================
+FROM node:18-alpine AS runner
+
+# Set working directory
+WORKDIR /app
+
+# Create non-root user for security
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 nextjs
+
+# Set environment variables
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV PORT=3000
+ENV HOSTNAME="0.0.0.0"
+
+# Install runtime dependencies
+RUN apk add --no-cache \
+    curl \
+    dumb-init \
+    && rm -rf /var/cache/apk/*
+
+# Copy necessary files from builder
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+
+# Set correct permissions
+RUN chown -R nextjs:nodejs /app
+USER nextjs
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:3000/api/health || exit 1
+
+# Expose port
+EXPOSE 3000
+
+# Start the application with dumb-init for proper signal handling
+CMD ["dumb-init", "node", "server.js"]
+
+# ============================================
+# DOCKER COMPOSE PRODUCTION SETUP
+# ============================================
+# To use with docker-compose, create docker-compose.prod.yml:
+# 
+# version: '3.8'
+# services:
+#   carrom-arena:
+#     build:
+#       context: .
+#       dockerfile: Dockerfile
+#     ports:
+#       - "3000:3000"
+#     environment:
+#       - NODE_ENV=production
+#       - DATABASE_URL=${DATABASE_URL}
+#       - JWT_SECRET=${JWT_SECRET}
+#     restart: unless-stopped
+#     healthcheck:
+#       test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+#       interval: 30s
+#       timeout: 10s
+#       retries: 3
+#       start_period: 40s
+# 
+#   redis:
+#     image: redis:7-alpine
+#     restart: unless-stopped
+#     command: redis-server --appendonly yes
+#     volumes:
+#       - redis_data:/data
+#     ports:
+#       - "6379:6379"
+# 
+#   postgres:
+#     image: postgres:15-alpine
+#     restart: unless-stopped
+#     environment:
+#       POSTGRES_DB: carrom_arena
+#       POSTGRES_USER: carrom_user
+#       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+#     volumes:
+#       - postgres_data:/var/lib/postgresql/data
+#     ports:
+#       - "5432:5432"
+# 
+# volumes:
+#   redis_data:
+#   postgres_data:
+
+# ============================================
+# BUILD COMMANDS
+# ============================================
+# Build the image:
+# docker build -t carrom-arena:latest .
+#
+# Run the container:
+# docker run -p 3000:3000 -e NODE_ENV=production carrom-arena:latest
+#
+# Build with build args:
+# docker build --build-arg NODE_ENV=production -t carrom-arena:prod .
+#
+# Multi-platform build:
+# docker buildx build --platform linux/amd64,linux/arm64 -t carrom-arena:latest .
+
+# ============================================
+# SECURITY BEST PRACTICES IMPLEMENTED
+# ============================================
+# ✅ Non-root user (nextjs:nodejs)
+# ✅ Multi-stage build (reduces attack surface)
+# ✅ Minimal base image (Alpine Linux)
+# ✅ Health checks enabled
+# ✅ Proper signal handling (dumb-init)
+# ✅ Cache optimization
+# ✅ Production-only dependencies
+# ✅ No dev dependencies in final image
+# ✅ Proper file permissions
+# ✅ Network security (expose only necessary ports)

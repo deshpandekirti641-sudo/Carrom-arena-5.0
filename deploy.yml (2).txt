@@ -1,0 +1,105 @@
+name: Deploy Carrom Arena to Vercel
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+env:
+  NODE_VERSION: '18'
+  
+jobs:
+  build-and-test:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: npm ci
+      
+    - name: Build application
+      run: npm run build
+      env:
+        NODE_ENV: production
+        NEXT_PUBLIC_APP_NAME: "Carrom Arena"
+        NEXT_PUBLIC_CURRENCY: "INR"
+        NEXT_PUBLIC_MIN_DEPOSIT: "10"
+        NEXT_PUBLIC_MAX_DEPOSIT: "2000"
+        NEXT_PUBLIC_MATCH_BET: "10"
+        NEXT_PUBLIC_WINNER_PAYOUT: "16"
+        NEXT_PUBLIC_SERVER_FEE: "4"
+        NEXT_PUBLIC_DEVELOPER_MOBILE: "8976096360"
+        NEXT_PUBLIC_DEVELOPER_EMAIL: "deshpandekirti641@gmail.com"
+        
+    - name: Run type check
+      run: npm run type-check
+      
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: build-files
+        path: |
+          .next/
+          public/
+          package.json
+          
+  deploy-production:
+    name: Deploy to Vercel
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        
+    - name: Install Vercel CLI
+      run: npm install --global vercel@latest
+      
+    - name: Pull Vercel Environment Information
+      run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+      
+    - name: Build Project Artifacts
+      run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+      
+    - name: Deploy Project Artifacts to Vercel
+      run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+      
+  health-check:
+    name: Post-Deploy Health Check
+    needs: deploy-production
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    steps:
+    - name: Wait for deployment
+      run: sleep 30
+      
+    - name: Check API Health
+      run: |
+        curl -f https://carrom-arena.vercel.app/api/health || exit 1
+        
+    - name: Check Main Page
+      run: |
+        curl -f https://carrom-arena.vercel.app/ || exit 1
+        
+    - name: Notify Success
+      run: |
+        echo "🎉 Carrom Arena deployed successfully!"
+        echo "🚀 Live URL: https://carrom-arena.vercel.app"
